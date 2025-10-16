@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import asyncio
+from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -22,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- State definitions for conversations ---
-SUBMITTING, BROADCASTING = range(2)
+SUBMITTING, AWAITING_CONFIRMATION, BROADCASTING = range(3)
 
 # --- Files for persistence ---
 USERS_DB = "users.json"
@@ -81,42 +82,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receives user message, posts it directly, and notifies admin."""
+    """Receives user message and asks for confirmation before posting."""
     message_text = update.message.text
-    user = update.effective_user
-    CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-    ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    context.user_data["message_to_send"] = message_text
 
-    try:
-        # Post the message directly to the public channel
-        posted_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=message_text
-        )
-        logger.info(f"Posted message {posted_message.message_id} to channel {CHANNEL_ID}")
-
-        # Send a confirmation to the user
-        await update.message.reply_text("Your message has been posted anonymously to the channel!")
-
-        # Send a notification to the admin with a delete button
-        keyboard = [
-            [
-                InlineKeyboardButton("🗑️ Delete Post", callback_data=f"delete:{posted_message.message_id}"),
-            ]
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Yes, post it", callback_data="confirm_post_yes"),
+            InlineKeyboardButton("❌ No, cancel", callback_data="confirm_post_no"),
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"New message posted by user `{user.id}`. It is now live in the channel.\n\n---\n{message_text}\n---",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN,
-        )
+    await update.message.reply_text(
+        f"Your message:\n---\n{message_text}\n---\n\nAre you sure you want to post this anonymously?",
+        reply_markup=reply_markup,
+    )
+    return AWAITING_CONFIRMATION
 
-    except Exception as e:
-        logger.error(f"Failed to post message for user {user.id}: {e}", exc_info=True)
-        await update.message.reply_text("Sorry, an error occurred and I couldn't post your message. Please try again later.")
+async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles user confirmation to post or cancel the message."""
+    query = update.callback_query
+    await query.answer()
 
+    if query.data == "confirm_post_yes":
+        message_text = context.user_data.get("message_to_send")
+        if not message_text:
+            await query.edit_message_text(text="Sorry, an error occurred. Please /start again.")
+            return ConversationHandler.END
+
+        user = query.from_user
+        CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+        ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+
+        try:
+            # Post the message to the public channel
+            posted_message = await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=message_text
+            )
+            logger.info(f"Posted message {posted_message.message_id} to channel {CHANNEL_ID}")
+
+            # Send a confirmation to the user
+            await query.edit_message_text(text="✅ Your message has been posted anonymously to the channel!")
+
+            # Prepare user info and timestamp for admin
+            user_info = f"ID: `{user.id}`"
+            if user.username:
+                user_info += f", Username: @{user.username}"
+            
+            # Timezone for Malaysia (GMT+8)
+            malaysia_tz = timezone(timedelta(hours=8))
+            timestamp = datetime.now(malaysia_tz).strftime("%d %b %Y, %I:%M %p")
+
+            # Send a notification to the admin with a delete button
+            keyboard = [
+                [
+                    InlineKeyboardButton("🗑️ Delete Post", callback_data=f"delete:{posted_message.message_id}"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=(
+                    f"*New Post*\n\n"
+                    f"👤 *User:* {user_info}\n"
+                    f"⏰ *Time:* {timestamp} (GMT+8)\n\n"
+                    f"*Message Content:*\n---\n{message_text}\n---"
+                ),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception as e:
+            logger.error(f"Failed to post message for user {user.id}: {e}", exc_info=True)
+            await query.edit_message_text(text="Sorry, an error occurred and I couldn't post your message. Please try again later.")
+
+    elif query.data == "confirm_post_no":
+        await query.edit_message_text(text="Submission cancelled. Use /start to send a different message.")
+    
     return ConversationHandler.END
 
 
@@ -200,6 +244,7 @@ def main() -> None:
         entry_points=[CommandHandler("start", start)],
         states={
             SUBMITTING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+            AWAITING_CONFIRMATION: [CallbackQueryHandler(handle_confirmation, pattern="^confirm_post_.*")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
