@@ -3,7 +3,7 @@ import logging
 import json
 import asyncio
 from datetime import datetime, timezone, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReactionTypeEmoji
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -62,6 +62,19 @@ def get_admin_id():
         logger.error("TELEGRAM_ADMIN_CHAT_ID is not set or invalid.")
         return 0
 
+# --- NEW: Helper Function for Reactions ---
+async def react_msg(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, emoji: str):
+    """Helper to set a reaction on a message."""
+    try:
+        await context.bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji)]
+        )
+    except Exception as e:
+        # Kadang-kadang reaction gagal kalau chat type tak support, kita ignore je error ni
+        logger.warning(f"Failed to set reaction: {e}")
+
 # --- Entry Point ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Checks membership and shows the main menu."""
@@ -78,13 +91,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     except Exception:
         channel_link = f"https://t.me/{CHANNEL_ID.lstrip('@')}"
         keyboard = [[InlineKeyboardButton("👉 Join Channel Dulu", url=channel_link)]]
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             f"👋 <b>Hai {user.first_name}!</b>\n\n"
             "Sebelum guna bot ni, korang kena join channel rasmi kitorang dulu tau.\n"
             "Dah join, baru tekan /start semula ya!",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML
         )
+        # React sedih sebab tak join lagi
+        await react_msg(context, user.id, msg.message_id, "😢")
         return ConversationHandler.END
 
     # 2. Show Main Menu
@@ -92,7 +107,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SELECTING_ACTION
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays the menu with animated emoji logic."""
+    """Displays the menu."""
     user_id = update.effective_user.id
     admin_id = get_admin_id()
 
@@ -168,7 +183,6 @@ async def handle_menu_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
 # --- Feature 1: Anonymous Submission (Text/Media) ---
 async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Captures Text, Photo, Video, Audio using copy_message logic."""
     context.user_data["msg_id"] = update.message.message_id
     context.user_data["chat_id"] = update.message.chat_id
 
@@ -181,39 +195,44 @@ async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         "👀 <b>Preview:</b> Min dah dapat mesej korang.\n\n"
         "Confirm nak post confession ni?",
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML
     )
+    # Reaction 'mata' sebab tengah preview
+    await react_msg(context, update.message.chat_id, msg.message_id, "👀") 
     return CONFIRM_SUBMISSION
 
 async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    user_chat_id = query.message.chat_id
+    msg_id_to_edit = query.message.message_id
 
     if query.data == "confirm_no":
-        await show_main_menu(update, context) # Return to menu
+        await show_main_menu(update, context) 
         return SELECTING_ACTION
 
     # Proceed with Posting
     CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
     ADMIN_ID = get_admin_id()
     
-    user_msg_id = context.user_data.get("msg_id")
-    user_chat_id = context.user_data.get("chat_id")
+    original_msg_id = context.user_data.get("msg_id")
+    original_chat_id = context.user_data.get("chat_id")
 
     try:
         # 1. Copy to Channel
         posted_msg = await context.bot.copy_message(
             chat_id=CHANNEL_ID,
-            from_chat_id=user_chat_id,
-            message_id=user_msg_id
+            from_chat_id=original_chat_id,
+            message_id=original_msg_id
         )
         
-        # 2. Notify User
+        # 2. Notify User & REACT SUCCESS
         await query.edit_message_text("✅ <b>Beres!</b> Confession korang dah masuk channel.", parse_mode=ParseMode.HTML)
+        await react_msg(context, user_chat_id, msg_id_to_edit, "🔥") # Reaction Api
         
         # 3. Log to Admin
         timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%d %b %Y, %I:%M %p")
@@ -231,8 +250,8 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Copy to admin
         await context.bot.copy_message(
             chat_id=ADMIN_ID,
-            from_chat_id=user_chat_id,
-            message_id=user_msg_id
+            from_chat_id=original_chat_id,
+            message_id=original_msg_id
         )
         
         # Add delete button for admin
@@ -242,6 +261,7 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error posting: {e}")
         await query.edit_message_text("❌ Alamak, error pulak. Mungkin fail/video besar sangat.")
+        await react_msg(context, user_chat_id, msg_id_to_edit, "💔") # Reaction Broken Heart
 
     return ConversationHandler.END
 
@@ -258,7 +278,9 @@ async def receive_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     await update.message.forward(chat_id=ADMIN_ID)
 
-    await update.message.reply_text("✅ Report diterima. Terima kasih sebab bagitahu Min.")
+    msg = await update.message.reply_text("✅ Report diterima. Terima kasih sebab bagitahu Min.")
+    await react_msg(context, update.message.chat_id, msg.message_id, "🫡") # Reaction Salute
+    
     return ConversationHandler.END
 
 # --- Feature 3: Feedback ---
@@ -273,7 +295,9 @@ async def receive_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         parse_mode=ParseMode.HTML
     )
     
-    await update.message.reply_text("✅ Feedback dah dihantar! Mekasih support.")
+    msg = await update.message.reply_text("✅ Feedback dah dihantar! Mekasih support.")
+    await react_msg(context, update.message.chat_id, msg.message_id, "❤️") # Reaction Love
+
     return ConversationHandler.END
 
 # --- Feature 4: Broadcast (Admin Only) ---
@@ -302,6 +326,7 @@ async def execute_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"🚫 Kena block: {blocked}",
         parse_mode=ParseMode.HTML
     )
+    await react_msg(context, message.chat_id, status_msg.message_id, "🎉") # Reaction Party
     return ConversationHandler.END
 
 # --- Admin Actions (Delete) ---
@@ -316,11 +341,14 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=msg_id)
             await query.edit_message_text("🗑️ Post berjaya dipadam.")
+            await react_msg(context, query.message.chat_id, query.message.message_id, "👌") # Reaction OK
         except Exception as e:
             await query.edit_message_text(f"❌ Gagal padam: {e}")
+            await react_msg(context, query.message.chat_id, query.message.message_id, "😢")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("❌ Operation dibatalkan.")
+    msg = await update.message.reply_text("❌ Operation dibatalkan.")
+    await react_msg(context, update.message.chat_id, msg.message_id, "👍")
     return ConversationHandler.END
 
 # --- Main Execution ---
