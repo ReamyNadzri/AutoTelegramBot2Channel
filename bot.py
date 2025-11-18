@@ -56,7 +56,6 @@ def save_user(user_id, username, first_name):
             logger.error("Failed to save user DB")
 
 def get_admin_id():
-    # Helper to safely get Admin ID as integer
     try:
         return int(os.getenv("TELEGRAM_ADMIN_CHAT_ID"))
     except (TypeError, ValueError):
@@ -78,11 +77,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             raise Exception("Not a member")
     except Exception:
         channel_link = f"https://t.me/{CHANNEL_ID.lstrip('@')}"
-        keyboard = [[InlineKeyboardButton("👉 Join Channel First", url=channel_link)]]
+        keyboard = [[InlineKeyboardButton("👉 Join Channel Dulu", url=channel_link)]]
         await update.message.reply_text(
-            f"👋 <b>Welcome {user.first_name}!</b>\n\n"
-            "To use this bot, you must first join our channel.\n"
-            "Please join and then type /start again.",
+            f"👋 <b>Hai {user.first_name}!</b>\n\n"
+            "Sebelum guna bot ni, korang kena join channel rasmi kitorang dulu tau.\n"
+            "Dah join, baru tekan /start semula ya!",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML
         )
@@ -99,9 +98,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Define Standard Buttons
     keyboard = [
-        [InlineKeyboardButton("📨 Send Anonymous Secret", callback_data="menu_send")],
-        [InlineKeyboardButton("🚨 Report a Message", callback_data="menu_report")],
-        [InlineKeyboardButton("💬 Send Feedback", callback_data="menu_feedback")]
+        [InlineKeyboardButton("📨 Hantar Confession", callback_data="menu_send")],
+        [InlineKeyboardButton("🚨 Report Message", callback_data="menu_report")],
+        [InlineKeyboardButton("💬 Bagi Feedback", callback_data="menu_feedback")]
     ]
 
     # Add Broadcast button ONLY if user is Admin
@@ -111,11 +110,10 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     text = (
-        "🔥 <b>Main Menu</b> 🔥\n\n"
-        "Select an action below:"
+        "🔥 <b>Menu Utama</b> 🔥\n\n"
+        "Pilih action kat bawah ni:"
     )
 
-    # Handle both Message and CallbackQuery (if returning to menu)
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
@@ -130,39 +128,38 @@ async def handle_menu_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
     if choice == "menu_send":
         await query.edit_message_text(
-            "🤫 <b>Anonymous Mode</b>\n\n"
-            "Send me your text, photo, video, or audio.\n"
-            "I will post it anonymously to the channel.",
+            "🤫 <b>Mode Confession</b>\n\n"
+            "Hantar je apa yang korang nak luahkan (Teks, Gambar, Video atau Audio).\n"
+            "Identiti korang **RAHSIA**. Min akan post kat channel tanpa nama.",
             parse_mode=ParseMode.HTML
         )
         return SUBMITTING_CONTENT
 
     elif choice == "menu_report":
         await query.edit_message_text(
-            "🚨 <b>Report Message</b>\n\n"
-            "Please <b>forward</b> the message you want to report to me, or send the Message ID.",
+            "🚨 <b>Lapor Salah Laku</b>\n\n"
+            "Ada mesej yang tak sepatutnya? Sila <b>Forward</b> mesej tu kat sini untuk Min semak.",
             parse_mode=ParseMode.HTML
         )
         return REPORTING_MESSAGE
 
     elif choice == "menu_feedback":
         await query.edit_message_text(
-            "💬 <b>Feedback</b>\n\n"
-            "Please type your feedback or suggestion for the admin.",
+            "💬 <b>Feedback / Cadangan</b>\n\n"
+            "Ada idea best untuk bot ni? Atau ada masalah? Tulis je kat sini.",
             parse_mode=ParseMode.HTML
         )
         return FEEDBACK_TEXT
 
     elif choice == "menu_broadcast":
-        # Double check security
         if update.effective_user.id != get_admin_id():
-            await query.edit_message_text("⛔ Access Denied.")
+            await query.edit_message_text("⛔ Korang bukan admin.")
             return ConversationHandler.END
         
         await query.edit_message_text(
-            "📢 <b>Broadcast Mode</b>\n\n"
-            "Send the message you want to broadcast to all users.\n"
-            "Type /cancel to stop.",
+            "📢 <b>Mode Hebahan (Admin)</b>\n\n"
+            "Hantar mesej yang nak di-blast kepada semua user.\n"
+            "Taip /cancel untuk batal.",
             parse_mode=ParseMode.HTML
         )
         return BROADCASTING_TEXT
@@ -172,23 +169,21 @@ async def handle_menu_selection(update: Update, context: ContextTypes.DEFAULT_TY
 # --- Feature 1: Anonymous Submission (Text/Media) ---
 async def receive_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Captures Text, Photo, Video, Audio using copy_message logic."""
-    # Store the message object to copy later
     context.user_data["msg_id"] = update.message.message_id
     context.user_data["chat_id"] = update.message.chat_id
 
     # Create confirmation buttons
     keyboard = [
         [
-            InlineKeyboardButton("✅ Yes, Post It", callback_data="confirm_yes"),
-            InlineKeyboardButton("❌ Cancel", callback_data="confirm_no"),
+            InlineKeyboardButton("✅ Onz, Post Je!", callback_data="confirm_yes"),
+            InlineKeyboardButton("❌ Batal", callback_data="confirm_no"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # We reply to the message asking for confirmation
     await update.message.reply_text(
-        "👀 <b>Preview:</b> I have received your message/media.\n\n"
-        "Are you sure you want to post this anonymously?",
+        "👀 <b>Preview:</b> Min dah dapat mesej korang.\n\n"
+        "Confirm nak post confession ni?",
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML
     )
@@ -210,7 +205,7 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_chat_id = context.user_data.get("chat_id")
 
     try:
-        # 1. Copy to Channel (Preserves Media, Captions, Format)
+        # 1. Copy to Channel
         posted_msg = await context.bot.copy_message(
             chat_id=CHANNEL_ID,
             from_chat_id=user_chat_id,
@@ -218,22 +213,22 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         
         # 2. Notify User
-        await query.edit_message_text("✅ <b>Sent!</b> Your secret is live.", parse_mode=ParseMode.HTML)
+        await query.edit_message_text("✅ <b>Beres!</b> Confession korang dah masuk channel.", parse_mode=ParseMode.HTML)
         
         # 3. Log to Admin
         timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%d %b %Y, %I:%M %p")
         user = query.from_user
         
         admin_log = (
-            f"🔔 <b>New Confession</b>\n"
-            f"👤 <b>From:</b> {user.first_name} (@{user.username}) [`{user.id}`]\n"
-            f"⏰ <b>Time:</b> {timestamp}\n"
-            f"👇 <b>Content below:</b>"
+            f"🔔 <b>Confession Baru!</b>\n"
+            f"👤 <b>Dari:</b> {user.first_name} (@{user.username}) [`{user.id}`]\n"
+            f"⏰ <b>Masa:</b> {timestamp}\n"
+            f"👇 <b>Isi kandungan:</b>"
         )
         
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_log, parse_mode=ParseMode.HTML)
         
-        # Copy the content to admin so they see exactly what was posted
+        # Copy to admin
         await context.bot.copy_message(
             chat_id=ADMIN_ID,
             from_chat_id=user_chat_id,
@@ -242,30 +237,28 @@ async def confirm_submission(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Add delete button for admin
         del_kb = [[InlineKeyboardButton("🗑️ Delete Post", callback_data=f"delete:{posted_msg.message_id}")]]
-        await context.bot.send_message(chat_id=ADMIN_ID, text="Action:", reply_markup=InlineKeyboardMarkup(del_kb))
+        await context.bot.send_message(chat_id=ADMIN_ID, text="Tindakan Admin:", reply_markup=InlineKeyboardMarkup(del_kb))
 
     except Exception as e:
         logger.error(f"Error posting: {e}")
-        await query.edit_message_text("❌ Error posting message. It might be too large or unsupported.")
+        await query.edit_message_text("❌ Alamak, error pulak. Mungkin fail/video besar sangat.")
 
     return ConversationHandler.END
 
 # --- Feature 2: Report Message ---
 async def receive_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Forwards the report to admin."""
     user = update.effective_user
     ADMIN_ID = get_admin_id()
 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=f"🚨 <b>REPORT RECEIVED</b>\nFrom: {user.first_name} (@{user.username})\n\nContent:",
+        text=f"🚨 <b>REPORT DITERIMA</b>\nDari: {user.first_name} (@{user.username})\n\nIsi Report:",
         parse_mode=ParseMode.HTML
     )
     
-    # Forward the actual reported message
     await update.message.forward(chat_id=ADMIN_ID)
 
-    await update.message.reply_text("✅ Report sent to admins. Thank you.")
+    await update.message.reply_text("✅ Report diterima. Terima kasih sebab bagitahu Min.")
     return ConversationHandler.END
 
 # --- Feature 3: Feedback ---
@@ -276,11 +269,11 @@ async def receive_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=f"💬 <b>FEEDBACK</b>\nFrom: {user.first_name} (@{user.username})\n\n{text}",
+        text=f"💬 <b>FEEDBACK USER</b>\nDari: {user.first_name} (@{user.username})\n\nMesej: {text}",
         parse_mode=ParseMode.HTML
     )
     
-    await update.message.reply_text("✅ Feedback sent! We appreciate it.")
+    await update.message.reply_text("✅ Feedback dah dihantar! Mekasih support.")
     return ConversationHandler.END
 
 # --- Feature 4: Broadcast (Admin Only) ---
@@ -288,26 +281,25 @@ async def execute_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     message = update.message
     users = load_users()
     
-    status_msg = await update.message.reply_text(f"⏳ Broadcasting to {len(users)} users...")
+    status_msg = await update.message.reply_text(f"⏳ Tengah blast mesej ke {len(users)} students...")
     
     count = 0
     blocked = 0
     
     for user_id in users:
         try:
-            # Using copy_message allows admin to broadcast images/videos too
             await context.bot.copy_message(chat_id=user_id, from_chat_id=message.chat_id, message_id=message.message_id)
             count += 1
-            await asyncio.sleep(0.05) # Safety delay
+            await asyncio.sleep(0.05)
         except Forbidden:
             blocked += 1
         except Exception:
             pass
             
     await status_msg.edit_text(
-        f"📢 <b>Broadcast Complete</b>\n\n"
-        f"✅ Sent: {count}\n"
-        f"🚫 Blocked: {blocked}",
+        f"📢 <b>Hebahan Selesai</b>\n\n"
+        f"✅ Berjaya hantar: {count}\n"
+        f"🚫 Kena block: {blocked}",
         parse_mode=ParseMode.HTML
     )
     return ConversationHandler.END
@@ -323,12 +315,12 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
         try:
             await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=msg_id)
-            await query.edit_message_text("🗑️ Post deleted successfully.")
+            await query.edit_message_text("🗑️ Post berjaya dipadam.")
         except Exception as e:
-            await query.edit_message_text(f"❌ Failed to delete: {e}")
+            await query.edit_message_text(f"❌ Gagal padam: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("❌ Operation cancelled.")
+    await update.message.reply_text("❌ Operation dibatalkan.")
     return ConversationHandler.END
 
 # --- Main Execution ---
@@ -340,7 +332,6 @@ def main() -> None:
 
     app = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
 
-    # The Main Conversation Handler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -348,7 +339,6 @@ def main() -> None:
                 CallbackQueryHandler(handle_menu_selection, pattern="^menu_.*")
             ],
             SUBMITTING_CONTENT: [
-                # This filter captures Text, Photos, Video, Audio, Documents (Everything)
                 MessageHandler(filters.ALL & ~filters.COMMAND, receive_submission)
             ],
             CONFIRM_SUBMISSION: [
